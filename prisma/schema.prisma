@@ -1,0 +1,145 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Role {
+  id               String      @id @default(cuid())
+  slug             String      @unique
+  title            String
+  team             String
+  location         String
+  calibrationNotes String
+  // Weighted score (0-100) at or above which the system recommends advancing.
+  inviteThreshold  Int         @default(70)
+  // Shown in invite emails: a booking link or plain instructions ("reply with three slots next week").
+  schedulingInfo   String      @default("Reply to this email with a few times that work for you over the next week.")
+  senderName       String      @default("The Kargo hiring team")
+  createdAt        DateTime    @default(now())
+  gates            Gate[]
+  criteria         Criterion[]
+  candidates       Candidate[]
+}
+
+model Gate {
+  id          String       @id @default(cuid())
+  roleId      String
+  role        Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  order       Int
+  label       String
+  description String
+  results     GateResult[]
+}
+
+model Criterion {
+  id      String           @id @default(cuid())
+  roleId  String
+  role    Role             @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  order   Int
+  name    String
+  weight  Int
+  level1  String
+  level2  String
+  level3  String
+  level4  String
+  level5  String
+  note    String?
+  results CriterionScore[]
+}
+
+// Status flow: NEW -> SCORED (AI scores and brief ready) -> ADVANCED | DECLINED (Arjun decided).
+// Deciding is the last human step: the invite or decline email is drafted and sent from there.
+model Candidate {
+  id             String           @id @default(cuid())
+  roleId         String
+  role           Role             @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  name           String
+  email          String
+  location       String?
+  source         String?
+  resumeText     String?
+  resumeFileName String?
+  resumePdf      Bytes?
+  status         String           @default("NEW")
+  aiModel        String?
+  aiScoredAt     DateTime?
+  aiError        String?
+  decidedAt      DateTime?
+  decidedBy      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  gateResults    GateResult[]
+  scores         CriterionScore[]
+  brief          Brief?
+  emails         Email[]
+}
+
+model GateResult {
+  id          String    @id @default(cuid())
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  gateId      String
+  gate        Gate      @relation(fields: [gateId], references: [id], onDelete: Cascade)
+  // PASS | FAIL | UNCLEAR
+  aiResult    String?
+  aiEvidence  String?
+  finalResult String?
+  note        String?
+
+  @@unique([candidateId, gateId])
+}
+
+model CriterionScore {
+  id           String    @id @default(cuid())
+  candidateId  String
+  candidate    Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  criterionId  String
+  criterion    Criterion @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  aiScore      Int?
+  aiEvidence   String?
+  aiRationale  String?
+  // Screener override; null means "use the AI score".
+  finalScore   Int?
+  overrideNote String?
+
+  @@unique([candidateId, criterionId])
+}
+
+model Brief {
+  id          String    @id @default(cuid())
+  candidateId String    @unique
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  summary     String
+  // One or two sentences on why the candidate sits where they do in the ranking.
+  rankReason  String    @default("")
+  // JSON-encoded string arrays (SQLite has no native list type).
+  strengths   String    @default("[]")
+  gaps        String    @default("[]")
+  probes      String    @default("[]")
+  source      String    @default("ai")
+  updatedAt   DateTime  @updatedAt
+}
+
+model Email {
+  id          String    @id @default(cuid())
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  // INVITE | DECLINE
+  kind        String    @default("INVITE")
+  toAddress   String
+  subject     String
+  body        String
+  // DRAFT | SENDING | SENT | FAILED
+  status      String    @default("DRAFT")
+  draftSource String    @default("template")
+  resendId    String?
+  error       String?
+  sentTo      String?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
