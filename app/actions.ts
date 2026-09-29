@@ -2,10 +2,19 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { aiConfigured } from "@/lib/ai";
 import { nameFromFileName, parseResumeFile } from "@/lib/resume";
-import { decide, ensureRows, queueScoring, sendEmailRecord, undoDecision } from "@/lib/service";
+import { decide, ensureRows, processNext, queueScoring, sendEmailRecord, undoDecision } from "@/lib/service";
+
+// Start scoring straight after the response is sent; open pages keep pulling the rest.
+async function queueAndKick(ids: string[]) {
+  await queueScoring(ids);
+  after(async () => {
+    for (let i = 0; i < Math.min(ids.length, 2); i++) if (!(await processNext())) break;
+  });
+}
 
 function str(fd: FormData, key: string) {
   const v = fd.get(key);
@@ -23,21 +32,33 @@ function errText(e: unknown) {
 
 // ---------- candidates ----------
 
-export async function addCandidates(fd: FormData) {
+export interface AddBatchResult {
+  error?: string;
+  created: string[];
+  problems: string[];
+  roleSlug?: string;
+  scoring: boolean;
+}
+
+// Adds one batch of CVs. The upload form sends files a few at a time (Vercel caps each
+// request at 4.5 MB) and navigates when every batch is done. "single" = 1 means the
+// name/email/location fields apply to this one candidate.
+export async function addCandidateBatch(fd: FormData): Promise<AddBatchResult> {
   const roleId = str(fd, "roleId");
   const role = await prisma.role.findUnique({ where: { id: roleId }, include: { gates: true, criteria: true } });
-  if (!role) redirect(withMsg("/candidates/new", "err", "Pick a role."));
+  if (!role) return { error: "Pick a role.", created: [], problems: [], scoring: false };
 
   const files = fd.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
   const pasted = str(fd, "resumeText");
-  const name = str(fd, "name");
-  const email = str(fd, "email");
-  const location = str(fd, "location");
+  const single = str(fd, "single") === "1";
+  const name = single ? str(fd, "name") : "";
+  const email = single ? str(fd, "email") : "";
+  const location = single ? str(fd, "location") : "";
   const source = str(fd, "source") || null;
-  const scoreNow = fd.get("scoreNow") === "on";
+  const scoreNow = str(fd, "scoreNow") === "1" && aiConfigured();
 
-  if (files.length === 0 && !pasted) redirect(withMsg("/candidates/new", "err", "Upload at least one CV or paste one."));
-  if (files.length === 0 && !name) redirect(withMsg("/candidates/new", "err", "Add the candidate's name for a pasted CV."));
+  if (files.length === 0 && !pasted) return { error: "Upload at least one CV or paste one.", created: [], problems: [], scoring: false };
+  if (files.length === 0 && !name) return { error: "Add the candidate's name for a pasted CV.", created: [], problems: [], scoring: false };
 
   const rows = {
     gateResults: { create: role.gates.map((g) => ({ gateId: g.id })) },
@@ -55,13 +76,12 @@ export async function addCandidates(fd: FormData) {
     for (const file of files) {
       try {
         const parsed = await parseResumeFile(file);
-        const single = files.length === 1;
         const c = await prisma.candidate.create({
           data: {
             roleId,
-            name: single && name ? name : nameFromFileName(parsed.fileName),
-            email: single ? email : "",
-            location: single && location ? location : null,
+            name: name || nameFromFileName(parsed.fileName),
+            email,
+            location: location || null,
             source,
             resumeFileName: parsed.fileName,
             resumeText: parsed.text ?? (single && pasted ? pasted : null),
@@ -76,22 +96,16 @@ export async function addCandidates(fd: FormData) {
     }
   }
 
-  if (scoreNow && aiConfigured() && created.length) queueScoring(created);
+  if (scoreNow && created.length) await queueAndKick(created);
   revalidatePath("/", "layout");
-
-  const note =
-    `Added ${created.length} candidate${created.length === 1 ? "" : "s"}.` +
-    (scoreNow && aiConfigured() && created.length ? " Scoring has started." : "") +
-    (problems.length ? ` Skipped: ${problems.join("; ")}` : "");
-  if (created.length === 1 && problems.length === 0) redirect(withMsg(`/candidates/${created[0]}`, "msg", note));
-  redirect(withMsg(`/roles/${role.slug}`, problems.length && !created.length ? "err" : "msg", note));
+  return { created, problems, roleSlug: role.slug, scoring: scoreNow && created.length > 0 };
 }
 
 export async function scoreCandidate(fd: FormData) {
   const id = str(fd, "id");
   if (!aiConfigured()) redirect(withMsg(`/candidates/${id}`, "err", "GEMINI_API_KEY is not set."));
   await prisma.candidate.update({ where: { id }, data: { aiError: null } });
-  queueScoring([id]);
+  await queueAndKick([id]);
   revalidatePath(`/candidates/${id}`);
   redirect(`/candidates/${id}`);
 }
@@ -105,7 +119,7 @@ export async function scoreAllUnscored(fd: FormData) {
     select: { id: true },
   });
   await prisma.candidate.updateMany({ where: { id: { in: todo.map((t) => t.id) } }, data: { aiError: null } });
-  queueScoring(todo.map((t) => t.id));
+  await queueAndKick(todo.map((t) => t.id));
   revalidatePath(`/roles/${role.slug}`);
   redirect(withMsg(`/roles/${role.slug}`, "msg", `Scoring ${todo.length} candidate${todo.length === 1 ? "" : "s"}.`));
 }
@@ -308,6 +322,9 @@ export async function updateRubric(fd: FormData) {
 // ---------- settings ----------
 
 export async function saveSettings(fd: FormData) {
+  if (process.env.VERCEL) {
+    redirect(withMsg("/settings", "err", "On Vercel, change these in the Vercel dashboard (Settings → Environment Variables), then redeploy."));
+  }
   const { writeEnv } = await import("@/lib/envfile");
   const values: Record<string, string> = {
     GEMINI_MODEL: str(fd, "GEMINI_MODEL"),

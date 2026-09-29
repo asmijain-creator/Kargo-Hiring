@@ -23,6 +23,7 @@ function masked(v: string | undefined) {
 export default async function Settings({ searchParams }: { searchParams: Promise<{ msg?: string; err?: string }> }) {
   const sp = await searchParams;
   const mail = mailConfig();
+  const onVercel = Boolean(process.env.VERCEL);
 
   return (
     <>
@@ -30,14 +31,22 @@ export default async function Settings({ searchParams }: { searchParams: Promise
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p className="muted">
-            Paste your keys here and press Save. They're stored in this app's <code>.env</code> file on your computer and take effect
-            straight away.
-          </p>
+          {onVercel ? (
+            <p className="muted">
+              This copy runs on Vercel, so settings are read-only here. Change them in the Vercel dashboard: your project → Settings →
+              Environment Variables (GEMINI_API_KEY, RESEND_API_KEY, EMAIL_TEST_REDIRECT, EMAIL_FROM, APP_PASSWORD…), then redeploy.
+            </p>
+          ) : (
+            <p className="muted">
+              Paste your keys here and press Save. They're stored in this app's <code>.env</code> file on your computer and take effect
+              straight away.
+            </p>
+          )}
         </div>
       </div>
 
       <form action={saveSettings} className="stack" style={{ maxWidth: 760 }} autoComplete="off">
+        <fieldset disabled={onVercel} style={{ border: "none", padding: 0, margin: 0 }} className="stack">
         <div className="card">
           <div className="row" style={{ justifyContent: "space-between" }}>
             <h2 style={{ margin: 0 }}>1. Gemini API key</h2>
@@ -121,9 +130,12 @@ export default async function Settings({ searchParams }: { searchParams: Promise
           </label>
         </div>
 
-        <div className="row">
-          <SubmitButton className="btn btn-primary" pendingText="Saving…">Save settings</SubmitButton>
-        </div>
+        {!onVercel && (
+          <div className="row">
+            <SubmitButton className="btn btn-primary" pendingText="Saving…">Save settings</SubmitButton>
+          </div>
+        )}
+        </fieldset>
       </form>
     </>
   );

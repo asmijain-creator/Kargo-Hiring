@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { authRequired } from "@/lib/auth";
+import { logout } from "./login/actions";
 
 export const metadata: Metadata = {
   title: "Kargo Hiring",
@@ -17,6 +19,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Link href="/candidates/new">Add CVs</Link>
           <Link href="/outbox">Outbox</Link>
           <Link href="/settings">Settings</Link>
+          {authRequired() && (
+            <form action={logout} style={{ marginLeft: "auto" }}>
+              <button type="submit" className="btn btn-sm">Sign out</button>
+            </form>
+          )}
         </nav>
         <main>{children}</main>
       </body>

@@ -6,13 +6,14 @@ export interface ParsedResume {
   pdf: Buffer | null;
 }
 
-const MAX_BYTES = 8 * 1024 * 1024;
+// Vercel caps a request at 4.5 MB, and uploads are batched to stay under it.
+const MAX_BYTES = 4 * 1024 * 1024;
 
 // CVs arrive in mixed formats. PDFs are kept as-is and sent to Gemini as documents;
 // Word and text files are converted to plain text.
 export async function parseResumeFile(file: File): Promise<ParsedResume> {
   const name = file.name || "resume";
-  if (file.size > MAX_BYTES) throw new Error(`${name} is larger than 8 MB.`);
+  if (file.size > MAX_BYTES) throw new Error(`${name} is larger than 4 MB. Compress it or save a smaller PDF.`);
   const buf = Buffer.from(await file.arrayBuffer());
   const ext = name.toLowerCase().split(".").pop() ?? "";
 

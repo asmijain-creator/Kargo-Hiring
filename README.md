@@ -17,7 +17,7 @@ Requires Node 20+.
 ```bash
 npm install
 cp .env.example .env      # then fill in the keys
-npm run setup             # creates the SQLite database and seeds both rubrics + 3 sample CVs
+npm run setup             # creates the tables in your Postgres database and seeds both rubrics + 3 sample CVs
 npm run dev               # http://localhost:3000
 ```
 
@@ -45,12 +45,21 @@ npm run dev               # http://localhost:3000
 
 ## How it's built
 
-Next.js 15 (App Router, server actions), Prisma + SQLite, `@google/genai` (Gemini, JSON-schema structured output, PDFs sent inline), Resend, mammoth for DOCX.
+Next.js 15 (App Router, server actions), Prisma + Postgres (Neon), `@google/genai` (Gemini, JSON-schema structured output, PDFs sent inline), Resend, mammoth for DOCX.
 
 - `lib/ai.ts`: scoring prompt, JSON schema, invite drafting, email templates.
 - `lib/scoring.ts`: weighted total, gate state, recommendation.
 - `lib/service.ts`: scoring, deciding, sending (with double-send guards and Resend idempotency keys).
-- `lib/queue.ts`: in-process queue, 3 CVs scored at a time. If the server restarts mid-batch, click "Score all unscored".
+- `lib/queue.ts`: scoring queue stored in the database; `/api/score-next` works through it one CV at a time.
 - `prisma/seed.mjs`: both rubrics. Re-running it never overwrites an existing role.
 
 CVs are treated as untrusted input: the scoring prompt tells Gemini to ignore instructions inside a CV and to flag them.
+
+## Deploying to Vercel
+
+1. Import the GitHub repo in Vercel (framework: Next.js, defaults are fine).
+2. **Storage → Create → Neon (Postgres)** and connect it to the project. This adds `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
+3. **Settings → Environment Variables**: add `APP_PASSWORD` (the login password), `GEMINI_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TEST_REDIRECT` (keep it set while testing), `EMAIL_AUTO_SEND`, `SCREENER_NAME`.
+4. Redeploy. The build creates the tables and seeds both rubrics (`prisma db push` + `prisma/seed.mjs`; re-running never overwrites existing roles).
+
+On Vercel the Settings page is read-only, so change keys in the Vercel dashboard. Scoring runs through `/api/score-next`, which open pages call while CVs are queued. Uploads are sent in batches of up to 3 MB to stay under Vercel's 4.5 MB request limit.

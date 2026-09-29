@@ -2,7 +2,7 @@ import { prisma } from "./db";
 import { aiConfigured, draftInvite, lastUsedModel, scoreResume, templateDecline, templateInvite } from "./ai";
 import { autoSendEnabled, sendEmail } from "./mailer";
 import { canAdvance, evaluate, parseList } from "./scoring";
-import { enqueue, setWorker } from "./queue";
+import { claimNext, enqueue, finish } from "./queue";
 
 export const candidateInclude = {
   role: { include: { gates: true, criteria: true } },
@@ -99,13 +99,23 @@ function briefData(
   };
 }
 
-// Errors are already recorded on the candidate by runScoring.
-setWorker(async (id) => {
-  await runScoring(id).catch(() => undefined);
-});
+export async function queueScoring(ids: string[]) {
+  await enqueue(ids);
+}
 
-export function queueScoring(ids: string[]) {
-  enqueue(ids);
+// Scores the next queued CV, if any. Returns false when the queue is empty.
+// Errors are recorded on the candidate by runScoring.
+export async function processNext(): Promise<boolean> {
+  const id = await claimNext();
+  if (!id) return false;
+  try {
+    await runScoring(id);
+  } catch {
+    // already saved as aiError
+  } finally {
+    await finish(id);
+  }
+  return true;
 }
 
 // ---------- deciding ----------

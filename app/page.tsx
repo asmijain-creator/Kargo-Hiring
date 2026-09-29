@@ -21,7 +21,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const undecided = all.filter((c) => c.status === "NEW" || c.status === "SCORED");
   const ready = undecided.filter((c) => c.ev.total != null);
   const oldest = undecided.length ? Math.max(...undecided.map((c) => daysSince(c.createdAt))) : 0;
-  const scoring = pendingCount();
+  const scoring = await pendingCount();
 
   return (
     <>

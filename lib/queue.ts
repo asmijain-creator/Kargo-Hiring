@@ -1,48 +1,44 @@
-// In-process queue for AI scoring, so a bulk upload of 60 CVs returns immediately and
-// candidates fill in as they're scored. State lives in memory: if the server restarts,
-// use "Score all unscored" to pick up anything that was left.
+import { prisma } from "./db";
 
-const CONCURRENCY = 3;
+// Scoring queue stored on the candidate rows, so it works on serverless hosting where
+// nothing survives between requests. Work is pulled one CV at a time by POST /api/score-next,
+// which open pages call while anything is queued.
 
-interface QueueState {
-  waiting: string[];
-  running: Set<string>;
-  worker: ((id: string) => Promise<void>) | null;
+// A claim older than this is treated as abandoned (the function that took it timed out).
+const STALE_MS = 6 * 60 * 1000;
+
+export async function enqueue(ids: string[]) {
+  if (!ids.length) return;
+  await prisma.candidate.updateMany({
+    where: { id: { in: ids }, status: { notIn: ["ADVANCED", "DECLINED"] } },
+    data: { aiQueuedAt: new Date(), aiStartedAt: null, aiError: null },
+  });
 }
 
-const g = globalThis as unknown as { __scoreQueue?: QueueState };
-const state: QueueState = (g.__scoreQueue ??= { waiting: [], running: new Set(), worker: null });
-
-export function setWorker(fn: (id: string) => Promise<void>) {
-  state.worker = fn;
+export function isPending(c: { aiQueuedAt: Date | null }) {
+  return c.aiQueuedAt != null;
 }
 
-export function enqueue(ids: string[]) {
-  for (const id of ids) {
-    if (!state.running.has(id) && !state.waiting.includes(id)) state.waiting.push(id);
+export async function pendingCount(roleId?: string) {
+  return prisma.candidate.count({ where: { aiQueuedAt: { not: null }, ...(roleId ? { roleId } : {}) } });
+}
+
+// Atomically claims the oldest queued candidate that nobody is working on.
+export async function claimNext(): Promise<string | null> {
+  const staleBefore = new Date(Date.now() - STALE_MS);
+  const available = { aiQueuedAt: { not: null }, OR: [{ aiStartedAt: null }, { aiStartedAt: { lt: staleBefore } }] };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const next = await prisma.candidate.findFirst({ where: available, orderBy: { aiQueuedAt: "asc" }, select: { id: true } });
+    if (!next) return null;
+    const claimed = await prisma.candidate.updateMany({
+      where: { id: next.id, ...available },
+      data: { aiStartedAt: new Date() },
+    });
+    if (claimed.count === 1) return next.id;
   }
-  pump();
+  return null;
 }
 
-export function isPending(id: string) {
-  return state.running.has(id) || state.waiting.includes(id);
-}
-
-export function pendingCount() {
-  return state.running.size + state.waiting.length;
-}
-
-function pump() {
-  const worker = state.worker;
-  if (!worker) return;
-  while (state.running.size < CONCURRENCY && state.waiting.length > 0) {
-    const id = state.waiting.shift()!;
-    state.running.add(id);
-    worker(id)
-      .catch((e) => console.error(`Scoring ${id} failed:`, e))
-      .finally(() => {
-        state.running.delete(id);
-        pump();
-      });
-  }
+export async function finish(id: string) {
+  await prisma.candidate.update({ where: { id }, data: { aiQueuedAt: null, aiStartedAt: null } });
 }

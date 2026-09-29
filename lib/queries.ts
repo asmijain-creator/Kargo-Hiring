@@ -14,6 +14,7 @@ export async function rankedCandidates(roleId?: string) {
       location: true,
       status: true,
       aiError: true,
+      aiQueuedAt: true,
       createdAt: true,
       decidedAt: true,
       role: { select: { id: true, slug: true, title: true, inviteThreshold: true } },
@@ -27,7 +28,7 @@ export async function rankedCandidates(roleId?: string) {
     .map((c) => {
       const ev = evaluate(c.scores, c.gateResults);
       const { rec, reason } = recommend(ev, c.role.inviteThreshold);
-      return { ...c, ev, rec, recReason: reason, pending: isPending(c.id) };
+      return { ...c, ev, rec, recReason: reason, pending: isPending(c) };
     })
     .sort(
       (a, b) =>

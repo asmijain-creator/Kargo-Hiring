@@ -10,6 +10,8 @@ import { Flash } from "@/components/Flash";
 import { SubmitButton } from "@/components/SubmitButton";
 
 export const dynamic = "force-dynamic";
+// Server actions on this page may score a CV or draft and send an email.
+export const maxDuration = 300;
 
 const TABS = [
   { key: "decide", label: "To decide", match: (s: string) => s === "NEW" || s === "SCORED" },

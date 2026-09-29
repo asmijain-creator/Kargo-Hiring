@@ -2,9 +2,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Postgres (Neon on Vercel). DATABASE_URL is the pooled URL used at runtime;
+// DATABASE_URL_UNPOOLED is the direct URL Prisma needs for schema changes.
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 model Role {
@@ -68,6 +71,9 @@ model Candidate {
   aiModel        String?
   aiScoredAt     DateTime?
   aiError        String?
+  // Scoring queue, kept in the database so it survives serverless restarts.
+  aiQueuedAt     DateTime?
+  aiStartedAt    DateTime?
   decidedAt      DateTime?
   decidedBy      String?
   createdAt      DateTime         @default(now())

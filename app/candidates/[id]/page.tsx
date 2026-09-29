@@ -22,6 +22,8 @@ import { Flash } from "@/components/Flash";
 import { SubmitButton } from "@/components/SubmitButton";
 
 export const dynamic = "force-dynamic";
+// Server actions on this page may score a CV or draft and send an email.
+export const maxDuration = 300;
 
 export default async function CandidatePage({
   params,
@@ -41,7 +43,7 @@ export default async function CandidatePage({
   const { rec, reason } = recommend(ev, c.role.inviteThreshold);
   const advance = canAdvance(c.status, ev);
   const decided = c.status === "ADVANCED" || c.status === "DECLINED";
-  const pending = isPending(c.id);
+  const pending = isPending(c);
   const scores = [...c.scores].sort((a, b) => a.criterion.order - b.criterion.order);
   const gates = [...c.gateResults].sort((a, b) => a.gate.order - b.gate.order);
   const email = c.emails[0];
