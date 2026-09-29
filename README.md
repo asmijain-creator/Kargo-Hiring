@@ -45,7 +45,7 @@ npm run dev               # http://localhost:3000
 
 ## How it's built
 
-Next.js 15 (App Router, server actions), Prisma + Postgres (Neon), `@google/genai` (Gemini, JSON-schema structured output, PDFs sent inline), Resend, mammoth for DOCX.
+Next.js 15 (App Router, server actions), Prisma + Postgres (Supabase), `@google/genai` (Gemini, JSON-schema structured output, PDFs sent inline), Resend, mammoth for DOCX.
 
 - `lib/ai.ts`: scoring prompt, JSON schema, invite drafting, email templates.
 - `lib/scoring.ts`: weighted total, gate state, recommendation.
@@ -58,7 +58,7 @@ CVs are treated as untrusted input: the scoring prompt tells Gemini to ignore in
 ## Deploying to Vercel
 
 1. Import the GitHub repo in Vercel (framework: Next.js, defaults are fine).
-2. **Storage → Create → Neon (Postgres)** and connect it to the project. This adds `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
+2. In Supabase, open **Connect → ORMs → Prisma** and copy `DATABASE_URL` (transaction pooler, port 6543, ends in `?pgbouncer=true`) and `DIRECT_URL` (session pooler, port 5432) into the Vercel project's environment variables.
 3. **Settings → Environment Variables**: add `APP_PASSWORD` (the login password), `GEMINI_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TEST_REDIRECT` (keep it set while testing), `EMAIL_AUTO_SEND`, `SCREENER_NAME`.
 4. Redeploy. The build creates the tables and seeds both rubrics (`prisma db push` + `prisma/seed.mjs`; re-running never overwrites existing roles).
 

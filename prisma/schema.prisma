@@ -2,12 +2,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Postgres (Neon on Vercel). DATABASE_URL is the pooled URL used at runtime;
-// DATABASE_URL_UNPOOLED is the direct URL Prisma needs for schema changes.
+// Postgres (Supabase). DATABASE_URL is the pooled (transaction, port 6543) URL used at runtime;
+// DIRECT_URL is the session (port 5432) URL Prisma needs for schema changes.
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  directUrl = env("DATABASE_URL_UNPOOLED")
+  directUrl = env("DIRECT_URL")
 }
 
 model Role {
