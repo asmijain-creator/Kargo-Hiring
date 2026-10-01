@@ -4,7 +4,8 @@
 import { readFileSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+// Seeding runs at build time, so use the direct (session) connection like `prisma db push` does.
+const prisma = new PrismaClient({ datasourceUrl: process.env.DIRECT_URL || process.env.DATABASE_URL });
 
 // Bump the version in rubric-version.json whenever the rubric below changes.
 const RUBRIC_VERSION = JSON.parse(readFileSync(new URL("./rubric-version.json", import.meta.url), "utf8")).version;
