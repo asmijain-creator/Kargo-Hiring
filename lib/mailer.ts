@@ -67,9 +67,3 @@ export async function sendEmail(opts: {
     return { ok: false, error: e instanceof Error ? e.message : String(e), sentTo: to };
   }
 }
-
-// Once Arjun decides, the email goes out on its own unless EMAIL_AUTO_SEND is "false",
-// in which case it waits in the outbox as a draft.
-export function autoSendEnabled() {
-  return (process.env.EMAIL_AUTO_SEND ?? "true").toLowerCase() !== "false";
-}

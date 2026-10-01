@@ -5,8 +5,17 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { aiConfigured } from "@/lib/ai";
-import { nameFromFileName, parseResumeFile } from "@/lib/resume";
-import { decide, ensureRows, processNext, queueScoring, sendEmailRecord, undoDecision } from "@/lib/service";
+import { splitPersonalDetails } from "@/lib/pii";
+import { parseResumeFile } from "@/lib/resume";
+import {
+  confirmAndSend,
+  ensureRows,
+  processNext,
+  queueScoring,
+  retryDraft,
+  sendEmailRecord,
+  switchEmailKind,
+} from "@/lib/service";
 
 // Start scoring straight after the response is sent; open pages keep pulling the rest.
 async function queueAndKick(ids: string[]) {
@@ -45,55 +54,45 @@ export interface AddBatchResult {
 // name/email/location fields apply to this one candidate.
 export async function addCandidateBatch(fd: FormData): Promise<AddBatchResult> {
   const roleId = str(fd, "roleId");
-  const role = await prisma.role.findUnique({ where: { id: roleId }, include: { gates: true, criteria: true } });
+  const role = await prisma.role.findUnique({ where: { id: roleId } });
   if (!role) return { error: "Pick a role.", created: [], problems: [], scoring: false };
 
   const files = fd.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
   const pasted = str(fd, "resumeText");
-  const single = str(fd, "single") === "1";
-  const name = single ? str(fd, "name") : "";
-  const email = single ? str(fd, "email") : "";
-  const location = single ? str(fd, "location") : "";
   const source = str(fd, "source") || null;
   const scoreNow = str(fd, "scoreNow") === "1" && aiConfigured();
 
   if (files.length === 0 && !pasted) return { error: "Upload at least one CV or paste one.", created: [], problems: [], scoring: false };
-  if (files.length === 0 && !name) return { error: "Add the candidate's name for a pasted CV.", created: [], problems: [], scoring: false };
 
-  const rows = {
-    gateResults: { create: role.gates.map((g) => ({ gateId: g.id })) },
-    scores: { create: role.criteria.map((c) => ({ criterionId: c.id })) },
-  };
-  const created: string[] = [];
+  const inputs: { fileName: string; text: string; pdf: Buffer | null }[] = [];
   const problems: string[] = [];
-
-  if (files.length === 0) {
-    const c = await prisma.candidate.create({
-      data: { roleId, name, email, location: location || null, source, resumeText: pasted, ...rows },
-    });
-    created.push(c.id);
-  } else {
-    for (const file of files) {
-      try {
-        const parsed = await parseResumeFile(file);
-        const c = await prisma.candidate.create({
-          data: {
-            roleId,
-            name: name || nameFromFileName(parsed.fileName),
-            email,
-            location: location || null,
-            source,
-            resumeFileName: parsed.fileName,
-            resumeText: parsed.text ?? (single && pasted ? pasted : null),
-            resumePdf: parsed.pdf ? new Uint8Array(parsed.pdf) : null,
-            ...rows,
-          },
-        });
-        created.push(c.id);
-      } catch (e) {
-        problems.push(errText(e));
-      }
+  if (files.length === 0) inputs.push({ fileName: str(fd, "name") || "pasted-cv.txt", text: pasted, pdf: null });
+  for (const file of files) {
+    try {
+      inputs.push(await parseResumeFile(file));
+    } catch (e) {
+      problems.push(errText(e));
     }
+  }
+
+  const created: string[] = [];
+  for (const input of inputs) {
+    // Personal details are split out here, in code, before anything reaches an AI step.
+    const { personal, content } = splitPersonalDetails(input.text, input.fileName);
+    const c = await prisma.candidate.create({
+      data: {
+        roleId,
+        name: personal.name,
+        email: personal.email,
+        phone: personal.phone || null,
+        source,
+        resumeFileName: input.fileName,
+        resumeText: content,
+        resumePdf: input.pdf ? new Uint8Array(input.pdf) : null,
+      },
+    });
+    await ensureRows(c.id);
+    created.push(c.id);
   }
 
   if (scoreNow && created.length) await queueAndKick(created);
@@ -115,7 +114,7 @@ export async function scoreAllUnscored(fd: FormData) {
   const role = await prisma.role.findUniqueOrThrow({ where: { id: roleId } });
   if (!aiConfigured()) redirect(withMsg(`/roles/${role.slug}`, "err", "GEMINI_API_KEY is not set."));
   const todo = await prisma.candidate.findMany({
-    where: { roleId, OR: [{ status: "NEW" }, { status: "SCORED", aiError: { not: null } }] },
+    where: { roleId, OR: [{ status: "NEW" }, { aiError: { not: null }, status: { notIn: ["ADVANCED", "DECLINED"] } }] },
     select: { id: true },
   });
   await prisma.candidate.updateMany({ where: { id: { in: todo.map((t) => t.id) } }, data: { aiError: null } });
@@ -124,29 +123,17 @@ export async function scoreAllUnscored(fd: FormData) {
   redirect(withMsg(`/roles/${role.slug}`, "msg", `Scoring ${todo.length} candidate${todo.length === 1 ? "" : "s"}.`));
 }
 
-// Saves screener overrides; if intent is advance/decline, also records the decision,
-// which drafts and (by default) sends the email.
+// Saves Arjun's score overrides (both rubrics) and contact details. Never sends anything.
 export async function saveReview(fd: FormData) {
-  return reviewAndMaybeDecide(fd, "save");
-}
-export async function saveAndAdvance(fd: FormData) {
-  return reviewAndMaybeDecide(fd, "advance");
-}
-export async function saveAndDecline(fd: FormData) {
-  return reviewAndMaybeDecide(fd, "decline");
-}
-
-async function reviewAndMaybeDecide(fd: FormData, intent: "save" | "advance" | "decline") {
   const id = str(fd, "id");
   const back = `/candidates/${id}`;
   await ensureRows(id);
   const c = await prisma.candidate.findUniqueOrThrow({ where: { id }, include: { scores: true, gateResults: true } });
-  if (c.status === "ADVANCED" || c.status === "DECLINED") redirect(withMsg(back, "err", "Already decided."));
 
-  const email = str(fd, "email");
-  const updates = [
+  await prisma.$transaction([
     ...c.scores.map((s) => {
       const raw = str(fd, `score_${s.criterionId}`);
+      if (!raw && !fd.has(`score_${s.criterionId}`)) return prisma.criterionScore.findUnique({ where: { id: s.id } });
       const n = raw ? Number(raw) : null;
       return prisma.criterionScore.update({
         where: { id: s.id },
@@ -157,6 +144,7 @@ async function reviewAndMaybeDecide(fd: FormData, intent: "save" | "advance" | "
       });
     }),
     ...c.gateResults.map((g) => {
+      if (!fd.has(`gate_${g.gateId}`)) return prisma.gateResult.findUnique({ where: { id: g.id } });
       const raw = str(fd, `gate_${g.gateId}`);
       const v = ["PASS", "FAIL", "UNCLEAR"].includes(raw) ? raw : null;
       return prisma.gateResult.update({
@@ -166,40 +154,62 @@ async function reviewAndMaybeDecide(fd: FormData, intent: "save" | "advance" | "
     }),
     prisma.candidate.update({
       where: { id },
-      data: { email: email || c.email, name: str(fd, "name") || c.name, location: str(fd, "location") || c.location },
+      data: {
+        email: str(fd, "email") || c.email,
+        name: str(fd, "name") || c.name,
+        phone: str(fd, "phone") || c.phone,
+        location: str(fd, "location") || c.location,
+      },
     }),
-  ];
-  await prisma.$transaction(updates);
-
-  // A fully hand-scored candidate is ready for a decision, same as an AI-scored one.
-  const after = await prisma.candidate.findUniqueOrThrow({ where: { id }, include: { scores: true } });
-  if (after.status === "NEW" && after.scores.every((s) => (s.finalScore ?? s.aiScore) != null)) {
-    await prisma.candidate.update({ where: { id }, data: { status: "SCORED" } });
-  }
-
-  if (intent === "advance" || intent === "decline") {
-    try {
-      await decide(id, intent === "advance" ? "ADVANCE" : "DECLINE");
-    } catch (e) {
-      revalidatePath("/", "layout");
-      redirect(withMsg(back, "err", errText(e)));
-    }
-    revalidatePath("/", "layout");
-    redirect(withMsg(back, "msg", intent === "advance" ? "Advanced." : "Declined."));
-  }
+  ]);
   revalidatePath("/", "layout");
-  redirect(withMsg(back, "msg", "Saved."));
+  redirect(withMsg(back, "msg", "Saved. If this changes the ranking, drafts update on their own."));
 }
 
-export async function undoDecisionAction(fd: FormData) {
+// Arjun's one action: confirm the draft and it goes out through Resend.
+export async function confirmSend(fd: FormData) {
   const id = str(fd, "id");
+  const back = str(fd, "back") || `/candidates/${id}`;
+  const subject = str(fd, "subject");
+  const body = String(fd.get("body") ?? "").trim();
+  let result: Awaited<ReturnType<typeof confirmAndSend>>;
   try {
-    await undoDecision(id);
+    result = await confirmAndSend(id, subject && body ? { subject, body } : undefined);
   } catch (e) {
-    redirect(withMsg(`/candidates/${id}`, "err", errText(e)));
+    redirect(withMsg(back, "err", errText(e)));
   }
   revalidatePath("/", "layout");
-  redirect(withMsg(`/candidates/${id}`, "msg", "Decision undone."));
+  redirect(
+    result.status === "SENT"
+      ? withMsg(back, "msg", `Sent to ${result.sentTo}.`)
+      : withMsg(back, "err", `Send failed: ${result.error}`)
+  );
+}
+
+export async function switchKind(fd: FormData) {
+  const id = str(fd, "id");
+  const back = str(fd, "back") || `/candidates/${id}`;
+  let next: string;
+  try {
+    next = await switchEmailKind(id);
+  } catch (e) {
+    redirect(withMsg(back, "err", errText(e)));
+  }
+  after(async () => {
+    await processNext();
+  });
+  revalidatePath("/", "layout");
+  redirect(withMsg(back, "msg", next === "INVITE" ? "Switched to an interview invite. Drafting it now." : "Switched to a rejection. Drafting it now."));
+}
+
+export async function retryDraftAction(fd: FormData) {
+  const id = str(fd, "id");
+  await retryDraft(id);
+  after(async () => {
+    await processNext();
+  });
+  revalidatePath("/", "layout");
+  redirect(withMsg(`/candidates/${id}`, "msg", "Drafting again."));
 }
 
 export async function deleteCandidate(fd: FormData) {
@@ -207,28 +217,6 @@ export async function deleteCandidate(fd: FormData) {
   const c = await prisma.candidate.delete({ where: { id }, include: { role: true } });
   revalidatePath("/", "layout");
   redirect(withMsg(`/roles/${c.role.slug}`, "msg", `Deleted ${c.name}.`));
-}
-
-export async function saveBrief(fd: FormData) {
-  const id = str(fd, "id");
-  const lines = (k: string) =>
-    JSON.stringify(
-      str(fd, k)
-        .split("\n")
-        .map((l) => l.replace(/^[-*•]\s*/, "").trim())
-        .filter(Boolean)
-    );
-  const data = {
-    summary: str(fd, "summary"),
-    rankReason: str(fd, "rankReason"),
-    strengths: lines("strengths"),
-    gaps: lines("gaps"),
-    probes: lines("probes"),
-    source: "edited",
-  };
-  await prisma.brief.upsert({ where: { candidateId: id }, create: { candidateId: id, ...data }, update: data });
-  revalidatePath(`/candidates/${id}`);
-  redirect(withMsg(`/candidates/${id}/brief`, "msg", "Brief saved."));
 }
 
 // ---------- email ----------
@@ -250,7 +238,8 @@ async function saveDraftAndMaybeSend(fd: FormData, send: boolean) {
     data: { toAddress: str(fd, "to"), subject: str(fd, "subject"), body: String(fd.get("body") ?? "").trim() },
   });
   if (send) {
-    await sendEmailRecord(id);
+    // Sending from the outbox is the same confirmation as on the candidate page.
+    await confirmAndSend(e.candidateId);
     const after = await prisma.email.findUniqueOrThrow({ where: { id } });
     revalidatePath("/", "layout");
     redirect(withMsg(back, after.status === "SENT" ? "msg" : "err", after.status === "SENT" ? "Email sent." : `Send failed: ${after.error}`));
@@ -259,9 +248,13 @@ async function saveDraftAndMaybeSend(fd: FormData, send: boolean) {
   redirect(withMsg(back, "msg", "Draft saved."));
 }
 
+// Confirms every unsent rejection in one go. Invites are always confirmed one at a time.
 export async function sendAllDrafts() {
-  const drafts = await prisma.email.findMany({ where: { status: { in: ["DRAFT", "FAILED"] } }, select: { id: true } });
-  for (const d of drafts) await sendEmailRecord(d.id);
+  const drafts = await prisma.email.findMany({
+    where: { status: { in: ["DRAFT", "FAILED"] }, kind: "DECLINE" },
+    select: { id: true, candidateId: true },
+  });
+  for (const d of drafts) await confirmAndSend(d.candidateId).catch(() => undefined);
   const failed = await prisma.email.count({ where: { id: { in: drafts.map((d) => d.id) }, status: "FAILED" } });
   revalidatePath("/", "layout");
   redirect(
@@ -332,7 +325,6 @@ export async function saveSettings(fd: FormData) {
     EMAIL_TEST_REDIRECT: str(fd, "EMAIL_TEST_REDIRECT"),
     EMAIL_REPLY_TO: str(fd, "EMAIL_REPLY_TO"),
     SCREENER_NAME: str(fd, "SCREENER_NAME"),
-    EMAIL_AUTO_SEND: fd.get("EMAIL_AUTO_SEND") === "on" ? "true" : "false",
   };
   // Secret fields are blank unless the user pasted a new key; blank means keep the current one.
   const gemini = str(fd, "GEMINI_API_KEY");

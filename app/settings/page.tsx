@@ -1,5 +1,5 @@
 import { aiConfigured, currentModel, DEFAULT_MODEL } from "@/lib/ai";
-import { autoSendEnabled, mailConfig } from "@/lib/mailer";
+import { mailConfig } from "@/lib/mailer";
 import { screenerName } from "@/lib/service";
 import { saveSettings } from "@/app/actions";
 import { Flash } from "@/components/Flash";
@@ -124,10 +124,7 @@ export default async function Settings({ searchParams }: { searchParams: Promise
             <label htmlFor="SCREENER_NAME">Decisions recorded as</label>
             <input id="SCREENER_NAME" type="text" name="SCREENER_NAME" defaultValue={screenerName()} />
           </div>
-          <label className="row" style={{ fontWeight: 400 }}>
-            <input type="checkbox" name="EMAIL_AUTO_SEND" defaultChecked={autoSendEnabled()} />
-            Send the email as soon as I click Advance or Decline (otherwise it waits in the Outbox)
-          </label>
+          <p className="small muted">Nothing is ever sent automatically: every email waits for you to click Confirm &amp; send.</p>
         </div>
 
         {!onVercel && (

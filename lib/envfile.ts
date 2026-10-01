@@ -9,7 +9,6 @@ export const EDITABLE_KEYS = [
   "EMAIL_FROM",
   "EMAIL_TEST_REDIRECT",
   "EMAIL_REPLY_TO",
-  "EMAIL_AUTO_SEND",
   "SCREENER_NAME",
 ] as const;
 export type EditableKey = (typeof EDITABLE_KEYS)[number];

@@ -24,6 +24,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "resend": "^6.30.0",
+    "unpdf": "^1.7.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

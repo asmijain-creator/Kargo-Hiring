@@ -100,3 +100,19 @@ export function parseList(json: string | null | undefined): string[] {
     return [];
   }
 }
+
+// A candidate has score rows for both rubrics; this evaluates them against one role's rubric.
+export function evaluateRole(
+  c: { scores: ScoreRow[]; gateResults: GateRow[] },
+  roleId: string
+): Evaluation {
+  return evaluate(
+    c.scores.filter((s) => s.criterion.roleId === roleId),
+    c.gateResults.filter((g) => g.gate.roleId === roleId)
+  );
+}
+
+// How many applicants per role get an interview invite drafted (the rest get a warm rejection).
+export const INVITE_SLOTS = 5;
+
+export type EmailKind = "INVITE" | "DECLINE";

@@ -5,6 +5,8 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // unpdf ships its own pdf.js build; load it from node_modules instead of bundling it.
+  serverExternalPackages: ["unpdf"],
   experimental: {
     // Resume PDFs are uploaded through a server action.
     serverActions: { bodySizeLimit: "10mb" },

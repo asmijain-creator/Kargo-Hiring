@@ -47,14 +47,10 @@ export function UploadForm({
     const pasted = String(form.get("resumeText") ?? "").trim();
     if (!files.length && !pasted) return setError("Upload at least one CV or paste one.");
 
-    const single = files.length <= 1;
     const fill = (fd: FormData) => {
       for (const k of ["roleId", "source"]) fd.set(k, String(form.get(k) ?? ""));
       fd.set("scoreNow", form.get("scoreNow") === "on" ? "1" : "0");
-      if (single) {
-        fd.set("single", "1");
-        for (const k of ["name", "email", "location", "resumeText"]) fd.set(k, String(form.get(k) ?? ""));
-      }
+      if (!files.length) fd.set("resumeText", pasted);
     };
 
     setBusy(true);
@@ -119,25 +115,20 @@ export function UploadForm({
         <input id="files" type="file" name="files" multiple accept=".pdf,.docx,.txt,.md,application/pdf" />
         <p className="small muted">
           Select many files at once for a bulk upload (up to 4 MB each).
-          {ai
-            ? " Gemini reads each CV and fills in the name, email and location."
-            : " Without an API key, fill in names and emails on each candidate page."}
+          {" "}Name, email and phone are pulled out of each CV in code and stored privately; only the rest of the CV goes to the AI.
+          Every candidate is scored against both the PM and SPM rubrics.
         </p>
       </div>
 
       <details style={{ marginBottom: 12 }}>
-        <summary>Single candidate details, or paste a CV instead of uploading</summary>
-        <div className="grid-2" style={{ marginTop: 12 }}>
-          <div className="field"><label>Name</label><input type="text" name="name" /></div>
-          <div className="field"><label>Email</label><input type="email" name="email" /></div>
-          <div className="field"><label>Location</label><input type="text" name="location" /></div>
-          <div className="field"><label>Source</label><input type="text" name="source" placeholder="e.g. LinkedIn, referral" /></div>
+        <summary>Source, or paste a CV instead of uploading</summary>
+        <div className="field" style={{ marginTop: 12 }}>
+          <label>Source</label><input type="text" name="source" placeholder="e.g. LinkedIn, referral" />
         </div>
         <div className="field">
           <label>CV text</label>
           <textarea name="resumeText" rows={10} placeholder="Paste the CV here" />
         </div>
-        <p className="small muted">Name and email apply only when you add a single candidate.</p>
       </details>
 
       <label className="row" style={{ fontWeight: 400, marginBottom: 16 }}>

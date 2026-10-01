@@ -2,21 +2,22 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { aiConfigured } from "@/lib/ai";
-import { daysSince, rankedCandidates } from "@/lib/queries";
+import { rankedCandidates } from "@/lib/queries";
+import { pendingWork } from "@/lib/service";
+import { effectiveScore, INVITE_SLOTS } from "@/lib/scoring";
 import { scoreAllUnscored } from "@/app/actions";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { EmailBadge, GateBadge, RecBadge, StatusBadge } from "@/components/Badges";
+import { DecisionPanel } from "@/components/DecisionPanel";
 import { Flash } from "@/components/Flash";
 import { SubmitButton } from "@/components/SubmitButton";
 
 export const dynamic = "force-dynamic";
-// Server actions on this page may score a CV or draft and send an email.
+// Server actions on this page send email and may draft one.
 export const maxDuration = 300;
 
 const TABS = [
   { key: "decide", label: "To decide", match: (s: string) => s === "NEW" || s === "SCORED" },
-  { key: "advanced", label: "Advanced", match: (s: string) => s === "ADVANCED" },
-  { key: "declined", label: "Declined", match: (s: string) => s === "DECLINED" },
+  { key: "sent", label: "Emailed", match: (s: string) => s === "ADVANCED" || s === "DECLINED" },
   { key: "all", label: "All", match: () => true },
 ];
 
@@ -32,22 +33,23 @@ export default async function RolePage({
   const role = await prisma.role.findUnique({ where: { slug }, include: { criteria: { orderBy: { order: "asc" } } } });
   if (!role) notFound();
 
-  const all = await rankedCandidates(role.id);
+  const [all, work] = await Promise.all([rankedCandidates(role.id), pendingWork()]);
   const tab = TABS.find((t) => t.key === sp.tab) ?? TABS[0];
   const rows = all.filter((c) => tab.match(c.status));
-  const scoring = all.filter((c) => c.pending).length;
   const unscored = all.filter((c) => c.status === "NEW" && !c.pending).length;
+  const back = `/roles/${role.slug}?tab=${tab.key}`;
+  const lineAfter = all.filter((c) => c.shortlisted).length;
 
   return (
     <>
-      <AutoRefresh active={scoring > 0} />
+      <AutoRefresh active={work.total > 0} />
       <Flash msg={sp.msg} err={sp.err} />
       <div className="page-head">
         <div>
           <h1>{role.title}</h1>
           <p className="muted">
-            {role.team} · {role.location} · Recommend advancing at {role.inviteThreshold}+ ·{" "}
-            <Link href={`/roles/${role.slug}/rubric`}>Rubric</Link>
+            {role.team} · {role.location} · {all.length} applicants · top {INVITE_SLOTS} get an interview invite drafted, everyone else a
+            warm rejection · <Link href={`/roles/${role.slug}/rubric`}>Rubric</Link>
           </p>
         </div>
         <div className="row">
@@ -61,7 +63,10 @@ export default async function RolePage({
         </div>
       </div>
 
-      {scoring > 0 && <div className="notice">Scoring {scoring} candidate{scoring === 1 ? "" : "s"}… this page updates on its own.</div>}
+      {work.scoring > 0 && (
+        <div className="notice">Scoring {work.scoring} CV{work.scoring === 1 ? "" : "s"} against both rubrics… this page updates on its own.</div>
+      )}
+      {work.drafting > 0 && <div className="notice">Writing briefs and draft emails ({work.drafting} to go)…</div>}
 
       <div className="row" style={{ marginBottom: 12 }}>
         {TABS.map((t) => (
@@ -71,67 +76,77 @@ export default async function RolePage({
         ))}
       </div>
 
-      <div className="card">
-        {rows.length === 0 ? (
-          <p className="muted">Nobody here.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Candidate</th>
-                  <th>Recommendation</th>
-                  <th className="num">Score</th>
-                  {role.criteria.map((c) => (
-                    <th key={c.id} className="num" title={`${c.name} (${c.weight}%)`}>C{c.order}</th>
-                  ))}
-                  <th>Gates</th>
-                  <th>Status</th>
-                  <th className="num">Waiting</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((c, i) => {
-                  const byCrit = new Map(c.scores.map((s) => [s.criterionId, s.finalScore ?? s.aiScore]));
-                  return (
-                    <tr key={c.id}>
-                      <td className="muted">{i + 1}</td>
-                      <td>
-                        <Link href={`/candidates/${c.id}`}><strong>{c.name}</strong></Link>
-                        <div className="small muted">{c.location || "Location not given"}</div>
-                        {c.brief?.rankReason && <div className="small muted" style={{ maxWidth: 360 }}>{c.brief.rankReason}</div>}
-                        {c.aiError && <div className="small" style={{ color: "var(--bad)" }}>AI: {c.aiError}</div>}
-                      </td>
-                      <td>{c.pending ? <span className="badge">Scoring…</span> : <RecBadge rec={c.rec} />}</td>
-                      <td className="num">
-                        <strong>{c.ev.total ?? "–"}</strong>
-                        <div className="bar" style={{ marginTop: 4 }}><span style={{ width: `${c.ev.total ?? c.ev.partial}%` }} /></div>
-                      </td>
-                      {role.criteria.map((cr) => (
-                        <td key={cr.id} className="num">{byCrit.get(cr.id) ?? "–"}</td>
-                      ))}
-                      <td><GateBadge value={c.ev.gates === "PENDING" ? null : c.ev.gates} /></td>
-                      <td>
-                        <StatusBadge status={c.status} />
-                        {c.emails[0] && (
-                          <div style={{ marginTop: 4 }}>
-                            <EmailBadge status={c.emails[0].status} />
-                          </div>
-                        )}
-                      </td>
-                      <td className="num small">{c.decidedAt ? "–" : `${daysSince(c.createdAt)}d`}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="small muted" style={{ marginTop: 12 }}>
-          {role.criteria.map((c) => `C${c.order} ${c.name} (${c.weight}%)`).join(" · ")}
-        </p>
+      {rows.length === 0 && <div className="card"><p className="muted">Nobody here.</p></div>}
+
+      <div className="stack">
+        {rows.map((c, i) => {
+          const showLine = tab.key !== "sent" && i > 0 && rows[i - 1].shortlisted && !c.shortlisted;
+          const scores = c.scores
+            .filter((s) => s.criterion.roleId === role.id)
+            .sort((a, b) => a.criterion.order - b.criterion.order);
+          return (
+            <div key={c.id}>
+              {showLine && (
+                <p className="small muted" style={{ textAlign: "center", margin: "4px 0 12px" }}>
+                  ─── the line: above get interview invites, below get warm rejections ───
+                </p>
+              )}
+              <div className="card" style={c.shortlisted ? { borderColor: "var(--good)" } : undefined}>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <h2 style={{ margin: 0 }}>
+                      <span className="muted">#{c.rank ?? "–"}</span> <Link href={`/candidates/${c.id}`}>{c.name}</Link>
+                    </h2>
+                    <div className="small muted">
+                      {c.shortlisted ? `Top ${INVITE_SLOTS}` : c.rank ? "Below the line" : c.pending ? "Scoring…" : "Not scored"}
+                      {c.emailKindOverride ? " · you switched this one" : ""}
+                      {c.ev.gates === "FAIL" ? " · fails a gate" : c.ev.gates === "UNCLEAR" ? " · a gate needs a human call" : ""}
+                    </div>
+                    {c.aiError && <div className="small" style={{ color: "var(--bad)" }}>Scoring failed: {c.aiError}</div>}
+                  </div>
+                  <div style={{ textAlign: "right", minWidth: 140 }}>
+                    <div className="score-big">{c.ev.total ?? "–"}<span className="muted" style={{ fontSize: 14 }}> / 100</span></div>
+                    {c.others.map((o) => (
+                      <div key={o.role.id} className="small muted">
+                        as {o.role.title}: {o.ev.total ?? "–"}
+                        {o.ev.total != null && c.ev.total != null && o.ev.total > c.ev.total + 5 ? " ▲ better fit" : ""}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {c.brief?.summary && (
+                  <p style={{ marginTop: 10 }}><strong>Brief:</strong> {c.brief.summary}</p>
+                )}
+
+                <details style={{ marginTop: 8 }}>
+                  <summary className="small">Score breakdown</summary>
+                  <ul className="plain small" style={{ marginTop: 6 }}>
+                    {scores.map((s) => (
+                      <li key={s.id}>
+                        <strong>{effectiveScore(s) ?? "–"}/5</strong> {s.criterion.name} ({s.criterion.weight}%)
+                        {s.aiRationale ? <span className="muted"> — {s.aiRationale}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+
+                <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                  <DecisionPanel
+                    candidateId={c.id}
+                    candidateEmail={c.email}
+                    email={c.emails[0]}
+                    draftError={c.draftError}
+                    waiting={work.total > 0}
+                    back={back}
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
+      {lineAfter === 0 && all.length > 0 && <p className="small muted">Nobody is scored yet.</p>}
     </>
   );
 }
