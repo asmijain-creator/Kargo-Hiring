@@ -1,9 +1,10 @@
 import { prisma } from "./db";
 import { isPending } from "./queue";
-import { evaluateRole, INVITE_SLOTS, recommend, type EmailKind } from "./scoring";
+import { evaluateRole, INVITE_SLOTS, MIN_INVITE_SCORE, recommend, type EmailKind } from "./scoring";
 
 // Every candidate, scored against both rubrics, ranked within the role they applied for.
-// The top INVITE_SLOTS per role (skipping anyone failing a gate) get an interview invite drafted;
+// The top INVITE_SLOTS per role who score at least MIN_INVITE_SCORE (skipping anyone failing a gate)
+// get an interview invite drafted;
 // everyone else gets a warm rejection, unless Arjun has switched it.
 export async function rankedCandidates(roleId?: string) {
   const [rows, roles] = await Promise.all([
@@ -21,6 +22,7 @@ export async function rankedCandidates(roleId?: string) {
         aiScoredAt: true,
         emailKindOverride: true,
         resumeText: true,
+        phone: true,
         roleId: true,
         createdAt: true,
         decidedAt: true,
@@ -63,7 +65,7 @@ export async function rankedCandidates(roleId?: string) {
     if (scored) {
       rank = (rankInRole.get(c.roleId) ?? 0) + 1;
       rankInRole.set(c.roleId, rank);
-      if (c.ev.gates !== "FAIL" && (slotsUsed.get(c.roleId) ?? 0) < INVITE_SLOTS) {
+      if (c.ev.gates !== "FAIL" && (c.ev.total ?? 0) >= MIN_INVITE_SCORE && (slotsUsed.get(c.roleId) ?? 0) < INVITE_SLOTS) {
         slotsUsed.set(c.roleId, (slotsUsed.get(c.roleId) ?? 0) + 1);
         shortlisted = true;
       }

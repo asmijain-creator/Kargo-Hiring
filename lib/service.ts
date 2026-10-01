@@ -146,6 +146,8 @@ export async function runDraft(candidateId: string) {
             }),
           ]
         : []),
+      // Dropped below the line: an AI brief written for the invite no longer applies.
+      ...(kind === "DECLINE" ? [prisma.brief.deleteMany({ where: { candidateId, source: "ai" } })] : []),
       prisma.candidate.update({ where: { id: candidateId }, data: { draftError: null } }),
     ]);
   } catch (e) {

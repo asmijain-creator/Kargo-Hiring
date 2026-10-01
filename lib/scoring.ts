@@ -114,5 +114,7 @@ export function evaluateRole(
 
 // How many applicants per role get an interview invite drafted (the rest get a warm rejection).
 export const INVITE_SLOTS = 5;
+// ...and only if they clear this score: with few applicants, "top 5" alone would invite weak CVs.
+export const MIN_INVITE_SCORE = 50;
 
 export type EmailKind = "INVITE" | "DECLINE";

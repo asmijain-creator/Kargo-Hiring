@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { aiConfigured } from "@/lib/ai";
 import { rankedCandidates } from "@/lib/queries";
 import { pendingWork } from "@/lib/service";
-import { effectiveScore, INVITE_SLOTS } from "@/lib/scoring";
+import { effectiveScore, INVITE_SLOTS, MIN_INVITE_SCORE } from "@/lib/scoring";
 import { scoreAllUnscored } from "@/app/actions";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { DecisionPanel } from "@/components/DecisionPanel";
@@ -48,8 +48,8 @@ export default async function RolePage({
         <div>
           <h1>{role.title}</h1>
           <p className="muted">
-            {role.team} · {role.location} · {all.length} applicants · top {INVITE_SLOTS} get an interview invite drafted, everyone else a
-            warm rejection · <Link href={`/roles/${role.slug}/rubric`}>Rubric</Link>
+            {role.team} · {role.location} · {all.length} applicants · top {INVITE_SLOTS} scoring {MIN_INVITE_SCORE}+ get an interview invite drafted, everyone
+            else a warm rejection · <Link href={`/roles/${role.slug}/rubric`}>Rubric</Link>
           </p>
         </div>
         <div className="row">
