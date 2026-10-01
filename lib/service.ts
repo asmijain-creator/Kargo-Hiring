@@ -44,9 +44,9 @@ export async function runScoring(candidateId: string) {
 
   try {
     const roles = await prisma.role.findMany({ include: { gates: true, criteria: true } });
-    const results = [];
-    // Only the redacted CV content goes to the AI. Name, email and phone stay in the database.
-    for (const role of roles) results.push(await scoreResume(role, c.resumeText));
+    // One call scores both rubrics. Only the redacted CV content goes to the AI;
+    // name, email and phone stay in the database.
+    const results = await scoreResume(roles, c.resumeText);
 
     await prisma.$transaction([
       ...results.flatMap((r) => [
